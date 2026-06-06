@@ -1,0 +1,139 @@
+From 0f4d2f7a1c0e4395d4a6b6886d4dc8bb57d4a74c Mon Sep 17 00:00:00 2001
+From: xihan123 <you@example.com>
+Date: Sun, 7 Jun 2026 02:15:00 +0800
+Subject: [PATCH] Florida: harden agent patcher
+
+---
+ src/anti-anti-frida.py | 112 +++++++++++++++++++++++++++----------------------
+ 1 file changed, 61 insertions(+), 51 deletions(-)
+
+diff --git a/src/anti-anti-frida.py b/src/anti-anti-frida.py
+index d1ce5f6..3e69e4c 100644
+--- a/src/anti-anti-frida.py
++++ b/src/anti-anti-frida.py
+@@ -1,60 +1,70 @@
+-import lief
+-import sys
++from pathlib import Path
+ import random
+-import os
+- 
+-def log_color(msg):
+-    print(f"\033[1;31;40m{msg}\033[0m")
+- 
++import sys
++
++import lief
++
++
++RANDOM_CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
++
++
++def log_color(message):
++    print(f"\033[1;31;40m{message}\033[0m")
++
++
++def random_name(length):
++    return "".join(random.sample(RANDOM_CHARSET, length))
++
++
++def replace_bytes(path, old, new):
++    if len(old) != len(new):
++        raise ValueError(f"replacement length mismatch: {old!r} -> {new!r}")
++
++    data = path.read_bytes()
++    count = data.count(old)
++    if count == 0:
++        return 0
++
++    path.write_bytes(data.replace(old, new))
++    return count
++
++
+ if __name__ == "__main__":
+-    input_file = sys.argv[1]
+-    random_charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+-    log_color(f"[*] Patch frida-agent: {input_file}")
+-    binary = lief.parse(input_file)
+- 
++    input_path = Path(sys.argv[1])
++    log_color(f"[*] Patch frida-agent: {input_path}")
++
++    binary = lief.parse(str(input_path))
+     if not binary:
+-        log_color(f"[*] Not elf, exit")
+-        exit()
+-    
+-    random_name = "".join(random.sample(random_charset, 5))
+-    log_color(f"[*] Patch `frida` to `{random_name}`")
++        log_color("[*] Not elf, exit")
++        sys.exit(0)
++
++    frida_replacement = random_name(5)
++    log_color(f"[*] Patch `frida` to `{frida_replacement}`")
+ 
+     for symbol in binary.symbols:
+         if symbol.name == "frida_agent_main":
+             symbol.name = "main"
+- 
++
+         if "frida" in symbol.name:
+-            symbol.name = symbol.name.replace("frida", random_name)
+- 
++            symbol.name = symbol.name.replace("frida", frida_replacement)
++
+         if "FRIDA" in symbol.name:
+-            symbol.name = symbol.name.replace("FRIDA", random_name)
+- 
+-    all_patch_string = ["FridaScriptEngine", "GLib-GIO", "GDBusProxy", "GumScript"]  # 字符串特征修改 尽量与源字符一样
+-    for section in binary.sections:
+-        if section.name != ".rodata":
+-            continue
+-        for patch_str in all_patch_string:
+-            addr_all = section.search_all(patch_str)  # Patch 内存字符串
+-            for addr in addr_all:
+-                patch = [ord(n) for n in list(patch_str)[::-1]]
+-                log_color(f"[*] Patching section name={section.name} offset={hex(section.file_offset + addr)} orig:{patch_str} new:{''.join(list(patch_str)[::-1])}")
+-                binary.patch_address(section.file_offset + addr, patch)
+- 
+-    binary.write(input_file)
+- 
+-    # thread_gum_js_loop
+-    random_name = "".join(random.sample(random_charset, 11))
+-    log_color(f"[*] Patch `gum-js-loop` to `{random_name}`")
+-    os.system(f"sed -b -i s/gum-js-loop/{random_name}/g {input_file}")
+- 
+-    # thread_gmain
+-    random_name = "".join(random.sample(random_charset, 5))
+-    log_color(f"[*] Patch `gmain` to `{random_name}`")
+-    os.system(f"sed -b -i s/gmain/{random_name}/g {input_file}")
+- 
+-    # thread_gdbus
+-    random_name = "".join(random.sample(random_charset, 5))
+-    log_color(f"[*] Patch `gdbus` to `{random_name}`")
+-    os.system(f"sed -b -i s/gdbus/{random_name}/g {input_file}")
+-
+-    log_color(f"[*] Patch Finish")
+\ No newline at end of file
++            symbol.name = symbol.name.replace("FRIDA", frida_replacement)
++
++    binary.write(str(input_path))
++
++    replacements = [
++        ("FridaScriptEngine", "FridaScriptEngine"[::-1]),
++        ("GLib-GIO", "GLib-GIO"[::-1]),
++        ("GDBusProxy", "GDBusProxy"[::-1]),
++        ("GumScript", "GumScript"[::-1]),
++        ("gum-js-loop", random_name(11)),
++        ("gmain", random_name(5)),
++        ("gdbus", random_name(5)),
++    ]
++
++    for old, new in replacements:
++        count = replace_bytes(input_path, old.encode(), new.encode())
++        log_color(f"[*] Patch `{old}` to `{new}` ({count} occurrence(s))")
++
++    log_color("[*] Patch Finish")
+-- 
+2.47.1
+
