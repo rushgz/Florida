@@ -1,0 +1,108 @@
+From 6f097a9b010237b6d09e9563b0c29728357c2984 Mon Sep 17 00:00:00 2001
+From: Florida CI <ci@florida.invalid>
+Date: Mon, 24 Aug 2026 11:44:21 +0800
+Subject: [PATCH] Florida: disable iOS 14 thread suspension
+
+---
+ gum/gummemory.c | 52 ++++++++++++++++++++++++++++++++++++-------------
+ 1 file changed, 39 insertions(+), 13 deletions(-)
+
+diff --git a/gum/gummemory.c b/gum/gummemory.c
+index f53a30b..2327610 100644
+--- a/gum/gummemory.c
++++ b/gum/gummemory.c
+@@ -18,6 +18,9 @@
+ #ifdef HAVE_PTRAUTH
+ # include <ptrauth.h>
+ #endif
++#ifdef HAVE_DARWIN
++# include <sys/utsname.h>
++#endif
+ #include <stdlib.h>
+ #include <string.h>
+
+@@ -624,6 +627,7 @@ gum_memory_patch_code_pages_via_mprotect (GPtrArray * sorted_addresses,
+   guint8 * apply_start, * apply_target_start;
+   guint apply_num_pages;
+   GumSuspendOperation suspend_op = { 0, };
++  gboolean should_suspend_threads = TRUE;
+   guint num_suspended;
+   guint8 * scratch, * source_page, * pristine, * pristine_page;
+   GumPageProtection * original_protections;
+@@ -730,6 +734,22 @@ gum_memory_patch_code_pages_via_mprotect (GPtrArray * sorted_addresses,
+
+   memcpy (pristine, scratch, sorted_addresses->len * page_size);
+
++#if defined (HAVE_IOS) || defined (HAVE_TVOS)
++  {
++    static gboolean ios14_compat_mode = FALSE;
++    static gsize check_done = 0;
++
++    if (g_once_init_enter (&check_done))
++    {
++      struct utsname u;
++      ios14_compat_mode = (uname (&u) == 0 && strncmp (u.release, "20.", 3) == 0);
++      g_once_init_leave (&check_done, 1);
++    }
++
++    should_suspend_threads = !ios14_compat_mode;
++  }
++#endif
++
+   apply_start = NULL;
+   apply_num_pages = 0;
+   source_page = scratch;
+@@ -771,10 +791,13 @@ gum_memory_patch_code_pages_via_mprotect (GPtrArray * sorted_addresses,
+   if (apply_num_pages != 0)
+     apply (apply_start, apply_target_start, apply_num_pages, apply_data);
+
+-  gum_metal_array_init (&suspend_op.suspended_threads, sizeof (GumThreadId));
+-  suspend_op.current_thread_id = gum_process_get_current_thread_id ();
+-  _gum_process_enumerate_threads (gum_maybe_suspend_thread, &suspend_op,
+-      GUM_THREAD_FLAGS_NONE);
++  if (should_suspend_threads)
++  {
++    gum_metal_array_init (&suspend_op.suspended_threads, sizeof (GumThreadId));
++    suspend_op.current_thread_id = gum_process_get_current_thread_id ();
++    _gum_process_enumerate_threads (gum_maybe_suspend_thread, &suspend_op,
++        GUM_THREAD_FLAGS_NONE);
++  }
+
+   for (i = 0; i != sorted_addresses->len; i++)
+   {
+@@ -827,20 +850,23 @@ gum_memory_patch_code_pages_via_mprotect (GPtrArray * sorted_addresses,
+       gum_clear_cache (g_ptr_array_index (sorted_addresses, i), page_size);
+   }
+
+-  num_suspended = suspend_op.suspended_threads.length;
+-
+-  for (i = 0; i != num_suspended; i++)
++  if (should_suspend_threads)
+   {
+-    GumThreadId * raw_id = gum_metal_array_element_at (
+-        &suspend_op.suspended_threads, i);
++    num_suspended = suspend_op.suspended_threads.length;
+
+-    gum_thread_resume (*raw_id, NULL);
++    for (i = 0; i != num_suspended; i++)
++    {
++      GumThreadId * raw_id = gum_metal_array_element_at (
++          &suspend_op.suspended_threads, i);
++
++      gum_thread_resume (*raw_id, NULL);
+ #ifdef HAVE_DARWIN
+-    mach_port_mod_refs (mach_task_self (), *raw_id, MACH_PORT_RIGHT_SEND, -1);
++      mach_port_mod_refs (mach_task_self (), *raw_id, MACH_PORT_RIGHT_SEND, -1);
+ #endif
+-  }
++    }
+
+-  gum_metal_array_free (&suspend_op.suspended_threads);
++    gum_metal_array_free (&suspend_op.suspended_threads);
++  }
+
+   gum_memory_free (scratch, sorted_addresses->len * page_size);
+   gum_memory_free (pristine, sorted_addresses->len * page_size);
+--
+2.50.1 (Apple Git-155)
+

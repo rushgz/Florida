@@ -1,0 +1,28 @@
+From 1ba2f1a9c5c8a92e8e9e064d28d2410ac351df2f Mon Sep 17 00:00:00 2001
+From: Florida CI <ci@florida.invalid>
+Date: Mon, 24 Aug 2026 11:45:48 +0800
+Subject: [PATCH] Florida: skip launchd injection on iOS
+
+---
+ src/darwin/darwin-host-session.vala | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/src/darwin/darwin-host-session.vala b/src/darwin/darwin-host-session.vala
+index f25be5f..0870762 100644
+--- a/src/darwin/darwin-host-session.vala
++++ b/src/darwin/darwin-host-session.vala
+@@ -320,6 +320,11 @@ namespace Frida {
+ 		private async uint inject_agent (uint pid, string agent_parameters, Cancellable? cancellable) throws Error, IOError {
+ 			uint id;
+
++#if IOS || TVOS
++			if (pid == 1)
++				throw new Error.NOT_SUPPORTED ("Injection into launchd is not supported on this jailbreak");
++#endif
++
+ 			unowned string entrypoint = "frida_agent_main";
+ #if HAVE_EMBEDDED_ASSETS
+ 			id = yield fruitjector.inject_library_resource (pid, agent, entrypoint, agent_parameters, cancellable);
+--
+2.50.1 (Apple Git-155)
+

@@ -138,6 +138,8 @@ jobs:
 
     - name: build frida for Android
       shell: bash
+      env:
+        FRIDA_VERSION: ${{ needs.check_version.outputs.FRIDA_VERSION }}
       run: |
         git config --global user.name "GitHub Actions"
         git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -145,7 +147,7 @@ jobs:
         export ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}
         echo "ANDROID_NDK_ROOT=$ANDROID_NDK_ROOT"
         
-        git clone --recurse-submodules https://github.com/frida/frida
+        git clone --recurse-submodules --branch "$FRIDA_VERSION" https://github.com/frida/frida
         cd frida
         for path in ../patches/*
         do
@@ -303,7 +305,7 @@ jobs:
       with:
         upload_url: '${{ steps.checkReleaseVersion.outputs.upload_url }}'
         asset_path: '${{ github.workspace }}/build-android-x86_64/subprojects/frida-core/inject/frida-inject.gz'
-        asset_name: 'florida-inject-${{ needs.check_version.outputs.FRIDA_VERSION }}-android-arm-x86_64.gz'
+        asset_name: 'florida-inject-${{ needs.check_version.outputs.FRIDA_VERSION }}-android-x86_64.gz'
         asset_content_type: application/octet-stream
     
     - name: Upload android arm frida-gadget for Florida
@@ -384,4 +386,182 @@ jobs:
         upload_url: '${{ steps.checkReleaseVersion.outputs.upload_url }}'
         asset_path: '${{ github.workspace }}/build-android-x86_64/subprojects/frida-gum/bindings/gumjs/libfrida-gumjs-1.0.a.gz'
         asset_name: 'florida-gumjs-${{ needs.check_version.outputs.FRIDA_VERSION }}-android-x86_64.a.gz'
+        asset_content_type: application/octet-stream
+
+  ios_build:
+    if: ${{ vars.BUILD_IOS == 'true' }}
+    runs-on: macos-latest
+    needs: [check_version, create_release]
+    env:
+      IOS_CERTID: ${{ secrets.IOS_CERTID }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.24.3'
+
+    - name: Import Apple signing certificate
+      env:
+        CERTIFICATES_P12: ${{ secrets.APPLE_CERTIFICATES_P12 }}
+        CERTIFICATES_PASSWORD: ${{ secrets.APPLE_CERTIFICATES_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -n "$CERTIFICATES_P12" || { echo 'APPLE_CERTIFICATES_P12 is required for iPhoneOS builds' >&2; exit 1; }
+        certificate_path="$RUNNER_TEMP/apple-certificates.p12"
+        keychain_path="$RUNNER_TEMP/florida-signing.keychain-db"
+        printf '%s' "$CERTIFICATES_P12" | base64 --decode > "$certificate_path"
+        security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+        security set-keychain-settings -lut 21600 "$keychain_path"
+        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
+        security import "$certificate_path" -P "$CERTIFICATES_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
+        security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
+        security list-keychain -d user -s "$keychain_path"
+        rm "$certificate_path"
+        if [ -z "${IOS_CERTID:-}" ]; then
+          IOS_CERTID="$(security find-identity -v -p codesigning | awk '/Apple Development:/{print $2; exit}')"
+          echo "IOS_CERTID=$IOS_CERTID" >> "$GITHUB_ENV"
+        fi
+
+    - name: Check iPhoneOS toolchain and signing identity
+      shell: bash
+      run: |
+        set -euo pipefail
+        xcodebuild -version
+        xcode-select -p
+        SDKROOT="$(xcrun --sdk iphoneos --show-sdk-path)"
+        test -d "$SDKROOT"
+        for tool in clang codesign lipo otool llvm-nm; do
+          xcrun --sdk iphoneos --find "$tool"
+        done
+        python3 -m pip install --upgrade pip lief
+        python3 -c 'import lief; print(lief.__version__)'
+        test -n "${IOS_CERTID:-}" || { echo 'IOS_CERTID or Apple certificate secrets are required' >&2; exit 1; }
+        test "$IOS_CERTID" != '-' || { echo 'An ad-hoc identity cannot produce a device release' >&2; exit 1; }
+        security find-identity -v -p codesigning
+
+    - name: Build Frida for iPhoneOS arm64
+      shell: bash
+      run: |
+        set -euo pipefail
+        git config --global user.name "GitHub Actions"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+        git clone --recurse-submodules --branch "$FRIDA_VERSION" https://github.com/frida/frida
+        cd frida
+        git rev-parse HEAD
+        for path in ../patches/*
+        do
+          name="$(basename "$path")"
+          echo "Applying patches in $path to subprojects/$name"
+          cd "subprojects/$name"
+          git am ../../../patches/"$name"/*.patch
+          cd ../..
+        done
+        cd ..
+
+        mkdir build-ios-arm64
+        cd build-ios-arm64
+        ../frida/configure \
+          --prefix=/usr \
+          --host=ios-arm64 \
+          -- \
+          -Dfrida-core:assets=installed \
+          -Dfrida-core:server=enabled
+        make
+        DESTDIR="$GITHUB_WORKSPACE/ios-staging" make install
+
+    - name: Verify iPhoneOS artifacts
+      id: verify_ios
+      shell: bash
+      run: |
+        set -euo pipefail
+        server="$GITHUB_WORKSPACE/ios-staging/usr/bin/frida-server"
+        agent="$GITHUB_WORKSPACE/ios-staging/usr/lib/frida-1.0/frida-agent.dylib"
+        test -x "$server"
+        test -f "$agent"
+
+        file "$server" | grep -Eq 'Mach-O 64-bit.*arm64'
+        file "$agent" | grep -Eq 'Mach-O 64-bit.*arm64'
+        lipo -verify_arch arm64 "$server"
+        lipo -verify_arch arm64 "$agent"
+
+        server_load_commands="$(otool -l "$server")"
+        if printf '%s\n' "$server_load_commands" | grep -q 'LC_BUILD_VERSION'; then
+          printf '%s\n' "$server_load_commands" | grep -A5 'LC_BUILD_VERSION' | grep -Eq 'platform[[:space:]]+(IOS|2)'
+        else
+          printf '%s\n' "$server_load_commands" | grep -q 'LC_VERSION_MIN_IPHONEOS'
+        fi
+        xcrun --sdk iphoneos nm -gU "$agent" | grep -Eq '[[:space:]]_?frida_agent_main$'
+
+        codesign --verify --strict --verbose=2 "$server"
+        codesign --verify --strict --verbose=2 "$agent"
+        codesign -dvvv --entitlements :- "$server" > "$GITHUB_WORKSPACE/frida-server.entitlements" 2>&1
+        codesign -dvvv --entitlements :- "$agent" > "$GITHUB_WORKSPACE/frida-agent.entitlements" 2>&1
+
+        server_asset="$GITHUB_WORKSPACE/florida-server-${{ needs.check_version.outputs.FRIDA_VERSION }}-iphoneos-arm64.gz"
+        agent_asset="$GITHUB_WORKSPACE/florida-agent-${{ needs.check_version.outputs.FRIDA_VERSION }}-iphoneos-arm64.dylib.gz"
+        gzip -c "$server" > "$server_asset"
+        gzip -c "$agent" > "$agent_asset"
+        test -s "$server_asset"
+        test -s "$agent_asset"
+        echo "server_asset=$server_asset" >> "$GITHUB_OUTPUT"
+        echo "agent_asset=$agent_asset" >> "$GITHUB_OUTPUT"
+
+    - name: Split Repository Name
+      id: split_name
+      run: |
+        repo_name=${{ github.repository }}
+        IFS='/' read -ra repo_parts <<< "$repo_name"
+        echo "owner=${repo_parts[0]}" >> $GITHUB_OUTPUT
+        echo "repo=${repo_parts[1]}" >> $GITHUB_OUTPUT
+
+    - name: Check release version
+      id: checkReleaseVersion
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          try {
+            const releaseVersion = '${{ needs.check_version.outputs.FRIDA_VERSION }}'
+            const releaseResponse = await github.repos.getReleaseByTag({
+              owner: '${{ steps.split_name.outputs.owner }}',
+              repo: '${{ steps.split_name.outputs.repo }}',
+              tag: releaseVersion
+            })
+            const {
+              data: { id: releaseId, html_url: htmlUrl, upload_url: uploadUrl }
+            } = releaseResponse;
+            core.setOutput('id', releaseId);
+            core.setOutput('html_url', htmlUrl);
+            core.setOutput('upload_url', uploadUrl);
+          } catch (e) {
+            core.setFailed(e.message);
+          }
+
+    - name: Upload iPhoneOS arm64 frida-server for Florida
+      uses: actions/upload-release-asset@v1.0.2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: '${{ steps.checkReleaseVersion.outputs.upload_url }}'
+        asset_path: '${{ steps.verify_ios.outputs.server_asset }}'
+        asset_name: 'florida-server-${{ needs.check_version.outputs.FRIDA_VERSION }}-iphoneos-arm64.gz'
+        asset_content_type: application/octet-stream
+
+    - name: Upload iPhoneOS arm64 frida-agent for Florida
+      uses: actions/upload-release-asset@v1.0.2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: '${{ steps.checkReleaseVersion.outputs.upload_url }}'
+        asset_path: '${{ steps.verify_ios.outputs.agent_asset }}'
+        asset_name: 'florida-agent-${{ needs.check_version.outputs.FRIDA_VERSION }}-iphoneos-arm64.dylib.gz'
         asset_content_type: application/octet-stream
