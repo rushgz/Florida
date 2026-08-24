@@ -506,7 +506,7 @@ jobs:
         script: |
           try {
             const releaseVersion = '${{ needs.check_version.outputs.FRIDA_VERSION }}'
-            const releaseResponse = await github.repos.getReleaseByTag({
+            const releaseResponse = await github.rest.repos.getReleaseByTag({
               owner: '${{ steps.split_name.outputs.owner }}',
               repo: '${{ steps.split_name.outputs.repo }}',
               tag: releaseVersion
