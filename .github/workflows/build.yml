@@ -465,8 +465,8 @@ jobs:
 
         file "$server" | grep -Eq 'Mach-O 64-bit.*arm64'
         file "$agent" | grep -Eq 'Mach-O 64-bit.*arm64'
-        lipo -verify_arch arm64 "$server"
-        lipo -verify_arch arm64 "$agent"
+        lipo "$server" -verify_arch arm64
+        lipo "$agent" -verify_arch arm64
 
         server_load_commands="$(otool -l "$server")"
         if printf '%s\n' "$server_load_commands" | grep -q 'LC_BUILD_VERSION'; then
