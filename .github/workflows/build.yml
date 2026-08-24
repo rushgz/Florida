@@ -393,7 +393,8 @@ jobs:
     runs-on: macos-latest
     needs: [check_version, create_release]
     env:
-      IOS_CERTID: ${{ secrets.IOS_CERTID }}
+      FRIDA_VERSION: ${{ needs.check_version.outputs.FRIDA_VERSION }}
+      IOS_CERTID: '-'
 
     steps:
     - uses: actions/checkout@v4
@@ -406,31 +407,7 @@ jobs:
       with:
         go-version: '1.24.3'
 
-    - name: Import Apple signing certificate
-      env:
-        CERTIFICATES_P12: ${{ secrets.APPLE_CERTIFICATES_P12 }}
-        CERTIFICATES_PASSWORD: ${{ secrets.APPLE_CERTIFICATES_PASSWORD }}
-        KEYCHAIN_PASSWORD: ${{ secrets.APPLE_KEYCHAIN_PASSWORD }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        test -n "$CERTIFICATES_P12" || { echo 'APPLE_CERTIFICATES_P12 is required for iPhoneOS builds' >&2; exit 1; }
-        certificate_path="$RUNNER_TEMP/apple-certificates.p12"
-        keychain_path="$RUNNER_TEMP/florida-signing.keychain-db"
-        printf '%s' "$CERTIFICATES_P12" | base64 --decode > "$certificate_path"
-        security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-        security set-keychain-settings -lut 21600 "$keychain_path"
-        security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain_path"
-        security import "$certificate_path" -P "$CERTIFICATES_PASSWORD" -A -t cert -f pkcs12 -k "$keychain_path"
-        security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
-        security list-keychain -d user -s "$keychain_path"
-        rm "$certificate_path"
-        if [ -z "${IOS_CERTID:-}" ]; then
-          IOS_CERTID="$(security find-identity -v -p codesigning | awk '/Apple Development:/{print $2; exit}')"
-          echo "IOS_CERTID=$IOS_CERTID" >> "$GITHUB_ENV"
-        fi
-
-    - name: Check iPhoneOS toolchain and signing identity
+    - name: Check iPhoneOS toolchain
       shell: bash
       run: |
         set -euo pipefail
@@ -443,9 +420,7 @@ jobs:
         done
         python3 -m pip install --upgrade pip lief
         python3 -c 'import lief; print(lief.__version__)'
-        test -n "${IOS_CERTID:-}" || { echo 'IOS_CERTID or Apple certificate secrets are required' >&2; exit 1; }
-        test "$IOS_CERTID" != '-' || { echo 'An ad-hoc identity cannot produce a device release' >&2; exit 1; }
-        security find-identity -v -p codesigning
+        test "$IOS_CERTID" = '-'
 
     - name: Build Frida for iPhoneOS arm64
       shell: bash

@@ -10,20 +10,16 @@ Follow [FRIDA](https://github.com/frida/frida) upstream to automatically apply F
 
 The workflow builds Android and iPhoneOS artifacts separately. The iPhoneOS target is `ios-arm64`; `iphoneos-arm64` is a package architecture name, not a Frida `configure --host` value.
 
-The iPhoneOS job requires a macOS runner with Xcode and an Apple development signing identity. Configure these repository secrets before setting `BUILD_IOS` to `true`:
+The iPhoneOS job uses ad-hoc signing for jailbroken devices, matching the `frida-patch` build flow. No Apple certificate or GitHub Actions secret is required. To enable it, create this repository variable:
 
-- `APPLE_CERTIFICATES_P12`: base64-encoded signing certificate and private key
-- `APPLE_CERTIFICATES_PASSWORD`: password for the PKCS#12 file
-- `APPLE_KEYCHAIN_PASSWORD`: temporary keychain password
-- `IOS_CERTID`: optional signing identity hash; when omitted, the first Apple Development identity is selected
+- `BUILD_IOS=true`
 
-The job configures Frida with installed assets and publishes the signed arm64 server and agent after checking their Mach-O type, iPhoneOS load command, exported `frida_agent_main` symbol, architecture, signature, and entitlements.
+The job configures Frida with `IOS_CERTID="-"` and installed assets, then publishes the ad-hoc-signed arm64 server and agent after checking their Mach-O type, iPhoneOS load command, exported `frida_agent_main` symbol, architecture, signature structure, and entitlements.
 
 For local builds on macOS:
 
 ```sh
-security find-identity -v -p codesigning
-export IOS_CERTID="<Apple Development identity hash>"
+export IOS_CERTID="-"
 git clone --recurse-submodules --branch 17.17.0 https://github.com/frida/frida
 cd frida
 for path in ../Florida/patches/*; do
@@ -44,7 +40,7 @@ ios-staging/usr/bin/frida-server
 ios-staging/usr/lib/frida-1.0/frida-agent.dylib
 ```
 
-A signed build is not by itself proof that a device can run or inject with it. Deployment still depends on the device architecture, jailbreak/runtime, entitlements, and a compatible transport. For a jailbroken device, copy both files to the paths expected by the target package or installation layout, then verify the connection with `frida-ps` and an attach test.
+An ad-hoc-signed build is intended for compatible jailbroken devices; it is not trusted by stock iOS. Deployment still depends on the device architecture, jailbreak/runtime, entitlements, and a compatible transport. Copy both files to the paths expected by the target package or installation layout, then verify the connection with `frida-ps` and an attach test.
 
 ## Download
 
