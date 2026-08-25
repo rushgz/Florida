@@ -28,6 +28,19 @@ index 50470ac8..64245792 100644
  				},
  				AgentMode.INSTANCED,
  				tempdir);
+
+diff --git a/lib/agent/meson.build b/lib/agent/meson.build
+--- a/lib/agent/meson.build
++++ b/lib/agent/meson.build
+@@ -77,7 +77,7 @@
+   )
+ 
+   if host_os_family == 'darwin'
+-    identity = 'FridaAgent'
++    identity = 'FloridaAgent'
+   else
+     identity = agent_name
+   endif
 -- 
 2.42.0
 

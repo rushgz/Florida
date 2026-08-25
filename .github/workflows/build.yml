@@ -474,7 +474,7 @@ jobs:
         else
           printf '%s\n' "$server_load_commands" | grep -q 'LC_VERSION_MIN_IPHONEOS'
         fi
-        xcrun --sdk iphoneos nm -gU "$agent" | grep -Eq '[[:space:]]_?frida_agent_main$'
+        xcrun --sdk iphoneos nm -gU "$agent" | grep -Eq '[[:space:]]_?florida_agent_main$'
 
         codesign --verify --strict --verbose=2 "$server"
         codesign --verify --strict --verbose=2 "$agent"
